@@ -108,8 +108,12 @@ function daysElapsedInclusive(startDate) {
 }
 
 function expectedFinishDate(goal) {
-  const days = Math.max(1, Math.ceil(totalChapters(goal.scope) / Math.max(1, goal.chaptersPerDay)));
-  return localDateString(addDays(parseDate(goal.startDate), days - 1));
+  return calculatedFinishDate(goal.startDate, goal.scope, goal.chaptersPerDay);
+}
+
+function calculatedFinishDate(startDate, scope, chaptersPerDay) {
+  const days = Math.max(1, Math.ceil(totalChapters(scope) / Math.max(1, chaptersPerDay)));
+  return localDateString(addDays(parseDate(startDate), days - 1));
 }
 
 function requiredPace(goal) {
@@ -151,7 +155,7 @@ function render() {
 
 function renderSetup() {
   const start = todayString();
-  const target = localDateString(addDays(new Date(), 120));
+  const target = calculatedFinishDate(start, "entireBible", 10);
   document.querySelector("#app").innerHTML = `
     <div class="app-main">
       <header class="top"><h1>Bible Reading Tracker</h1><p class="subtitle">Set your first local reading goal.</p></header>
@@ -160,7 +164,7 @@ function renderSetup() {
           ${field("Start date", `<input id="startDate" type="date" value="${start}">`)}
           ${field("Chapters per day", `<input id="chaptersPerDay" type="number" min="1" max="150" value="10">`)}
           ${field("Scope", scopeSelect("entireBible"))}
-          ${field("Target finish date", `<input id="targetFinishDate" type="date" value="${target}">`)}
+          ${field("Target finish date", `<input id="targetFinishDate" type="date" value="${target}" readonly>`)}
         </div>
         <button class="primary" id="startButton">Start Tracking</button>
       </section>
@@ -169,12 +173,13 @@ function renderSetup() {
     state.goal = {
       startDate: value("#startDate"),
       chaptersPerDay: Math.max(1, Number(value("#chaptersPerDay"))),
-      targetFinishDate: value("#targetFinishDate") || null,
+      targetFinishDate: calculatedFinishDate(value("#startDate"), value("#scope"), Math.max(1, Number(value("#chaptersPerDay")))),
       scope: value("#scope"),
     };
     saveState();
     render();
   });
+  ["startDate", "chaptersPerDay", "scope"].forEach((id) => document.querySelector(`#${id}`).addEventListener("change", updateTargetFinishDateField));
 }
 
 function renderDashboard() {
@@ -231,7 +236,7 @@ function renderSettings() {
       ${field("Start date", `<input id="startDate" type="date" value="${goal.startDate}">`)}
       ${field("Chapters per day", `<input id="chaptersPerDay" type="number" min="1" max="150" value="${goal.chaptersPerDay}">`)}
       ${field("Scope", scopeSelect(goal.scope))}
-      ${field("Target finish date", `<input id="targetFinishDate" type="date" value="${goal.targetFinishDate || ""}">`)}
+      ${field("Target finish date", `<input id="targetFinishDate" type="date" value="${expectedFinishDate(goal)}" readonly>`)}
       ${field("Language display", `<select id="languageMode">${Object.entries(languageLabels).map(([key, label]) => `<option value="${key}" ${state.languageMode === key ? "selected" : ""}>${label}</option>`).join("")}</select>`)}
     </div></section>
     <h2 class="section-title">Backup</h2><section class="card padded actions">
@@ -270,15 +275,22 @@ function toggleChapter(bookId, chapterNumber) {
 }
 
 function saveSettings() {
+  const chaptersPerDay = Math.max(1, Number(value("#chaptersPerDay")));
   state.goal = {
     startDate: value("#startDate"),
-    chaptersPerDay: Math.max(1, Number(value("#chaptersPerDay"))),
-    targetFinishDate: value("#targetFinishDate") || null,
+    chaptersPerDay,
+    targetFinishDate: calculatedFinishDate(value("#startDate"), value("#scope"), chaptersPerDay),
     scope: value("#scope"),
   };
   state.languageMode = value("#languageMode");
   saveState();
   renderSettings();
+}
+
+function updateTargetFinishDateField() {
+  const target = document.querySelector("#targetFinishDate");
+  if (!target) return;
+  target.value = calculatedFinishDate(value("#startDate"), value("#scope"), Math.max(1, Number(value("#chaptersPerDay"))));
 }
 
 async function exportBackup() {
