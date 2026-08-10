@@ -59,6 +59,13 @@ button {
   margin: 20px 0 24px;
 }
 
+.top-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 h1 {
   margin: 0;
   font-size: clamp(36px, 10vw, 58px);
@@ -136,6 +143,18 @@ h1 {
 .secondary {
   background: var(--soft);
   color: var(--text);
+}
+
+.mini-action {
+  flex: 0 0 auto;
+  min-height: 36px;
+  border: 0;
+  border-radius: 999px;
+  padding: 0 12px;
+  background: var(--blue);
+  color: white;
+  font-size: 13px;
+  font-weight: 900;
 }
 
 .danger {
