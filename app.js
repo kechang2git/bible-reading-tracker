@@ -1,4 +1,8 @@
 const STORAGE_KEY = "bible-reading-tracker-static-pwa-v1";
+const BACKUP_DB_NAME = "bible-reading-tracker-backups";
+const BACKUP_STORE_NAME = "handles";
+const BACKUP_DIRECTORY_KEY = "backupDirectory";
+const BACKUP_FILENAME = "bible-reading-tracker-backup.json";
 
 const books = [
   ["創世記", "Genesis", "old", 50], ["出埃及記", "Exodus", "old", 40], ["利未記", "Leviticus", "old", 27],
@@ -35,10 +39,10 @@ const tabs = [["dashboard", "◴", "Dashboard"], ["bible", "☑", "Bible"], ["ca
 let state = loadState();
 let activeTab = "dashboard";
 let expandedBooks = new Set();
-let backupFileHandle = null;
+let backupDirectoryHandle = null;
 
 function loadState() {
-  const fallback = { goal: null, languageMode: "both", progress: [] };
+  const fallback = { goal: null, languageMode: "both", progress: [], backupLocation: null };
   try {
     return { ...fallback, ...JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}") };
   } catch {
@@ -48,7 +52,6 @@ function loadState() {
 
 function saveState() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-  writeAutomaticBackup();
 }
 
 function todayString(date = new Date()) {
@@ -72,6 +75,10 @@ function addDays(date, days) {
 
 function formatDate(value) {
   return parseDate(value).toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" });
+}
+
+function formatDateWithWeekday(value) {
+  return parseDate(value).toLocaleDateString(undefined, { weekday: "short", month: "long", day: "numeric", year: "numeric" });
 }
 
 function booksInScope(scope) {
@@ -131,7 +138,17 @@ function summary() {
   const total = totalChapters(goal.scope);
   const expected = Math.min(total, daysElapsedInclusive(goal.startDate) * Math.max(1, goal.chaptersPerDay));
   const actual = completed.length;
-  return { completed, total, actual, expected, remaining: total - actual, aheadBehind: actual - expected, percent: Math.round((actual / total) * 100), onTrack: actual >= expected };
+  return { completed, latest: latestCompleted(completed), total, actual, expected, remaining: total - actual, aheadBehind: actual - expected, percent: Math.round((actual / total) * 100), onTrack: actual >= expected };
+}
+
+function latestCompleted(completed) {
+  return completed
+    .filter((item) => item.completedTimestamp || item.completedDate)
+    .sort((a, b) => completionTime(b) - completionTime(a))[0] || null;
+}
+
+function completionTime(item) {
+  return new Date(item.completedTimestamp || `${item.completedDate}T00:00:00`).getTime();
 }
 
 function render() {
@@ -141,7 +158,7 @@ function render() {
   }
   document.querySelector("#app").innerHTML = `
     <div class="app-main">
-      <header class="top"><h1>${tabTitle(activeTab)}</h1><p class="subtitle">Local-first offline PWA</p></header>
+      <header class="top"><div class="top-row"><h1>${tabTitle(activeTab)}</h1>${activeTab === "bible" ? `<button class="mini-action" id="quickBackup">Backup</button>` : ""}</div><p class="subtitle">Local-first offline PWA</p></header>
       <div id="content"></div>
     </div>
     <nav class="tabs">${tabs.map(([key, icon, label]) => `<button class="tab ${activeTab === key ? "active" : ""}" data-tab="${key}"><b>${icon}</b>${label}</button>`).join("")}</nav>
@@ -151,6 +168,7 @@ function render() {
   if (activeTab === "bible") renderBible();
   if (activeTab === "calendar") renderCalendar();
   if (activeTab === "settings") renderSettings();
+  document.querySelector("#quickBackup")?.addEventListener("click", confirmQuickBackup);
 }
 
 function renderSetup() {
@@ -185,13 +203,14 @@ function renderSetup() {
 function renderDashboard() {
   const s = summary();
   const goal = state.goal;
+  const latest = s.latest ? chapterName(books[s.latest.bookId - 1], s.latest.chapterNumber) : "No chapters completed yet";
   document.querySelector("#content").innerHTML = `
     <section class="card hero">
       <div class="ring" style="--progress:${s.percent * 3.6}deg"><strong>${s.percent}%</strong></div>
       <div class="status ${s.onTrack ? "on" : "off"}">${s.onTrack ? "✓ On Track" : "⚠ Off Track"}</div>
     </section>
     <h2 class="section-title">Progress</h2>
-    <section class="card">${row("Completed", `${s.actual} / ${s.total}`)}${row("Remaining", s.remaining)}${row("Expected by today", s.expected)}${row(s.aheadBehind >= 0 ? "Ahead" : "Behind", Math.abs(s.aheadBehind))}</section>
+    <section class="card">${row("Completed", `${s.actual} / ${s.total}`)}${row("Last completed", latest)}${row("Remaining", s.remaining)}${row("Expected by today", s.expected)}${row(s.aheadBehind >= 0 ? "Ahead" : "Behind", Math.abs(s.aheadBehind))}</section>
     <h2 class="section-title">Goal</h2>
     <section class="card">${row("Scope", scopeLabels[goal.scope])}${row("Start date", formatDate(goal.startDate))}${row("Expected finish", formatDate(expectedFinishDate(goal)))}${row("Chapters/day", goal.chaptersPerDay)}</section>
   `;
@@ -226,7 +245,7 @@ function renderCalendar() {
     grouped[item.completedDate] = [...(grouped[item.completedDate] || []), item];
   });
   const dates = Object.keys(grouped).sort().reverse();
-  document.querySelector("#content").innerHTML = dates.length ? `<section class="card">${dates.map((date) => `<div class="calendar-day"><h3>${formatDate(date)}</h3><p>${grouped[date].length} chapters completed</p><ul>${grouped[date].sort((a, b) => a.bookId === b.bookId ? a.chapterNumber - b.chapterNumber : a.bookId - b.bookId).map((item) => `<li>${chapterName(books[item.bookId - 1], item.chapterNumber)}</li>`).join("")}</ul></div>`).join("")}</section>` : `<section class="card empty">Checked chapters will appear here by completion date.</section>`;
+  document.querySelector("#content").innerHTML = dates.length ? `<section class="card">${dates.map((date) => `<div class="calendar-day"><h3>${formatDateWithWeekday(date)}</h3><p>${grouped[date].length} chapters completed</p><ul>${grouped[date].sort((a, b) => a.bookId === b.bookId ? a.chapterNumber - b.chapterNumber : a.bookId - b.bookId).map((item) => `<li>${chapterName(books[item.bookId - 1], item.chapterNumber)}</li>`).join("")}</ul></div>`).join("")}</section>` : `<section class="card empty">Checked chapters will appear here by completion date.</section>`;
 }
 
 function renderSettings() {
@@ -241,8 +260,8 @@ function renderSettings() {
     </div></section>
     <h2 class="section-title">Backup</h2><section class="card padded actions">
       <p class="backup-note">${backupStatusText()}</p>
+      <button class="secondary" id="selectBackupFolder">Select Backup Folder</button>
       <div class="backup-row"><button class="secondary" id="exportBackup">${exportButtonLabel()}</button><button class="secondary" id="importBackup">Import Backup</button></div>
-      <button class="secondary" id="setBackupFile">Set Auto Backup File</button>
       <input class="hidden" id="backupFile" type="file" accept="application/json">
     </section>
     <h2 class="section-title">Reset</h2><section class="card padded actions"><button class="danger" id="resetProgress">Reset All Progress</button><button class="danger" id="resetGoal">Reset Goal Only</button></section>`;
@@ -251,7 +270,7 @@ function renderSettings() {
   document.querySelector("#resetGoal").addEventListener("click", () => { if (confirm("Reset goal only? Progress stays saved.")) { state.goal = null; saveState(); render(); } });
   document.querySelector("#exportBackup").addEventListener("click", exportBackup);
   document.querySelector("#importBackup").addEventListener("click", chooseImportBackup);
-  document.querySelector("#setBackupFile").addEventListener("click", setAutomaticBackupFile);
+  document.querySelector("#selectBackupFolder").addEventListener("click", selectBackupFolder);
   document.querySelector("#backupFile").addEventListener("change", importBackup);
 }
 
@@ -294,43 +313,67 @@ function updateTargetFinishDateField() {
 }
 
 async function exportBackup() {
-  const text = JSON.stringify(state, null, 2);
-  const filename = `bible-reading-tracker-backup-${todayString()}.json`;
-  if ("showSaveFilePicker" in window) {
+  await writeBackup();
+}
+
+async function writeBackup() {
+  const text = backupText();
+  if (backupDirectoryHandle) {
     try {
-      const handle = await window.showSaveFilePicker({
-        suggestedName: filename,
-        types: [{ description: "JSON backup", accept: { "application/json": [".json"] } }],
-      });
-      await writeToHandle(handle, text);
-      return;
+      await verifyPermission(backupDirectoryHandle, true);
+      const fileHandle = await backupDirectoryHandle.getFileHandle(BACKUP_FILENAME, { create: true });
+      await writeToHandle(fileHandle, text);
+      alert(`Backup saved to ${backupLocationName()}/${BACKUP_FILENAME}`);
+      return true;
     } catch (error) {
-      if (error.name === "AbortError") return;
+      if (error.name === "AbortError") return false;
+      backupDirectoryHandle = null;
+      state.backupLocation = { type: "prompt", name: backupLocationName() };
+      saveState();
     }
   }
 
+  if (!state.backupLocation) {
+    const proceed = confirm("No backup folder has been selected. Continue with the browser Save to Files/download flow?");
+    if (!proceed) return false;
+  }
+
   if (navigator.canShare && navigator.share) {
-    const file = new File([text], filename, { type: "application/json" });
+    const file = new File([text], BACKUP_FILENAME, { type: "application/json" });
     if (navigator.canShare({ files: [file] })) {
       try {
         await navigator.share({ files: [file] });
-        return;
+        return true;
       } catch (error) {
-        if (error.name === "AbortError") return;
+        if (error.name === "AbortError") return false;
       }
     }
   }
 
-  const blob = new Blob([JSON.stringify(state, null, 2)], { type: "application/json" });
+  const blob = new Blob([text], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = filename;
+  link.download = BACKUP_FILENAME;
   link.click();
   URL.revokeObjectURL(url);
+  return true;
 }
 
 async function chooseImportBackup() {
+  if (backupDirectoryHandle) {
+    try {
+      await verifyPermission(backupDirectoryHandle, false);
+      const fileHandle = await backupDirectoryHandle.getFileHandle(BACKUP_FILENAME);
+      await importBackupText(await (await fileHandle.getFile()).text());
+      alert(`Backup imported from ${backupLocationName()}/${BACKUP_FILENAME}`);
+      return;
+    } catch (error) {
+      if (error.name === "AbortError") return;
+      alert(`Could not read ${BACKUP_FILENAME} from the selected backup folder. Choose a backup file manually.`);
+    }
+  }
+
   if ("showOpenFilePicker" in window) {
     try {
       const [handle] = await window.showOpenFilePicker({
@@ -338,9 +381,7 @@ async function chooseImportBackup() {
         types: [{ description: "JSON backup", accept: { "application/json": [".json"] } }],
       });
       const file = await handle.getFile();
-      state = { goal: null, languageMode: "both", progress: [], ...JSON.parse(await file.text()) };
-      saveState();
-      render();
+      await importBackupText(await file.text());
       return;
     } catch (error) {
       if (error.name === "AbortError") return;
@@ -349,30 +390,111 @@ async function chooseImportBackup() {
   document.querySelector("#backupFile").click();
 }
 
-async function setAutomaticBackupFile() {
-  if (!("showSaveFilePicker" in window)) {
-    alert("Automatic backup to a chosen file is not supported in this browser. On iPhone, use Export Backup and Save to Files when you want a copy in iCloud Drive.");
-    return;
+async function selectBackupFolder() {
+  if ("showDirectoryPicker" in window) {
+    try {
+      backupDirectoryHandle = await window.showDirectoryPicker({ mode: "readwrite" });
+      await verifyPermission(backupDirectoryHandle, true);
+      await saveBackupDirectoryHandle(backupDirectoryHandle);
+      state.backupLocation = { type: "directory", name: backupDirectoryHandle.name || "Selected folder" };
+      saveState();
+      renderSettings();
+      alert(`Backup folder selected: ${backupLocationName()}`);
+      return;
+    } catch (error) {
+      if (error.name !== "AbortError") alert("Could not select that backup folder.");
+      return;
+    }
   }
-  try {
-    backupFileHandle = await window.showSaveFilePicker({
-      suggestedName: "bible-reading-tracker-auto-backup.json",
-      types: [{ description: "JSON backup", accept: { "application/json": [".json"] } }],
-    });
-    await writeAutomaticBackup();
-    alert("Auto backup file is set for this browser session.");
-    renderSettings();
-  } catch (error) {
-    if (error.name !== "AbortError") alert("Could not set the backup file.");
+
+  const name = prompt("This browser cannot remember a writable folder. Enter a label for where you will save backups, such as iCloud Drive/Bible Backup.", backupLocationName());
+  if (!name) return;
+  state.backupLocation = { type: "prompt", name };
+  saveState();
+  renderSettings();
+}
+
+async function confirmQuickBackup() {
+  if (!confirm(`Save backup to ${backupLocationName()}/${BACKUP_FILENAME}?`)) return;
+  await writeBackup();
+}
+
+async function importBackupText(text) {
+  const currentBackupLocation = state.backupLocation || null;
+  state = { goal: null, languageMode: "both", progress: [], ...JSON.parse(text), backupLocation: currentBackupLocation };
+  saveState();
+  render();
+}
+
+function backupText() {
+  return JSON.stringify(state, null, 2);
+}
+
+async function initBackupLocation() {
+  backupDirectoryHandle = await loadBackupDirectoryHandle();
+  if (backupDirectoryHandle && !state.backupLocation) {
+    state.backupLocation = { type: "directory", name: backupDirectoryHandle.name || "Selected folder" };
+    saveState();
   }
 }
 
-async function writeAutomaticBackup() {
-  if (!backupFileHandle) return;
+function openBackupDb() {
+  return new Promise((resolve, reject) => {
+    if (!("indexedDB" in window)) {
+      resolve(null);
+      return;
+    }
+    const request = indexedDB.open(BACKUP_DB_NAME, 1);
+    request.onupgradeneeded = () => request.result.createObjectStore(BACKUP_STORE_NAME);
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function loadBackupDirectoryHandle() {
   try {
-    await writeToHandle(backupFileHandle, JSON.stringify(state, null, 2));
+    const db = await openBackupDb();
+    if (!db) return null;
+    return await new Promise((resolve, reject) => {
+      const request = db.transaction(BACKUP_STORE_NAME, "readonly").objectStore(BACKUP_STORE_NAME).get(BACKUP_DIRECTORY_KEY);
+      request.onsuccess = () => resolve(request.result || null);
+      request.onerror = () => reject(request.error);
+    });
   } catch {
-    backupFileHandle = null;
+    return null;
+  }
+}
+
+async function saveBackupDirectoryHandle(handle) {
+  const db = await openBackupDb();
+  if (!db) return;
+  await new Promise((resolve, reject) => {
+    const request = db.transaction(BACKUP_STORE_NAME, "readwrite").objectStore(BACKUP_STORE_NAME).put(handle, BACKUP_DIRECTORY_KEY);
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error);
+  });
+}
+
+async function verifyPermission(handle, readwrite) {
+  const options = readwrite ? { mode: "readwrite" } : { mode: "read" };
+  if (!handle.queryPermission || !handle.requestPermission) return true;
+  if ((await handle.queryPermission(options)) === "granted") return true;
+  if ((await handle.requestPermission(options)) === "granted") return true;
+  throw new DOMException("Permission denied", "NotAllowedError");
+}
+
+function backupLocationName() {
+  return state.backupLocation?.name || (isIOSDevice() ? "Files/iCloud Drive" : "selected backup location");
+}
+
+async function writeAutomaticBackup() {
+  if (!backupDirectoryHandle) return;
+  try {
+    await verifyPermission(backupDirectoryHandle, true);
+    const fileHandle = await backupDirectoryHandle.getFileHandle(BACKUP_FILENAME, { create: true });
+    await writeToHandle(fileHandle, backupText());
+  } catch {
+    backupDirectoryHandle = null;
   }
 }
 
@@ -383,18 +505,23 @@ async function writeToHandle(handle, text) {
 }
 
 function backupStatusText() {
+  if (backupDirectoryHandle) {
+    return `Backup folder: ${backupLocationName()}. Exports and Bible-tab Backup write ${BACKUP_FILENAME} there when permission is available.`;
+  }
+  if (state.backupLocation) {
+    return `Backup location: ${backupLocationName()}. This browser cannot auto-write there, so exports use the iOS/browser save flow for ${BACKUP_FILENAME}.`;
+  }
   if (isIOSDevice()) {
-    return "On iPhone, each export is a new iOS download or Save to Files action. iOS does not let this PWA remember a folder or overwrite the previous backup automatically.";
+    return `No backup location selected. On iPhone, the app can remember a label, but each export still uses Save to Files for ${BACKUP_FILENAME}.`;
   }
-  if (!("showSaveFilePicker" in window)) {
-    return "This browser cannot auto-write to a chosen folder. Export Backup opens the browser save/download flow, and Import Backup opens a file picker.";
+  if (!("showDirectoryPicker" in window)) {
+    return "This browser cannot remember a writable folder. Select Backup Folder stores a label and export/import use browser file flows.";
   }
-  if (backupFileHandle) return "Auto backup is active for this browser session.";
-  return "This browser can save to a chosen file after you approve it. Use Set Auto Backup File to enable session backup.";
+  return `Select a backup folder to save and import ${BACKUP_FILENAME}.`;
 }
 
 function exportButtonLabel() {
-  return isIOSDevice() ? "Export Backup to Files" : "Export Backup";
+  return backupDirectoryHandle ? "Export Backup" : "Export Backup to Files";
 }
 
 function isIOSDevice() {
@@ -404,11 +531,8 @@ function isIOSDevice() {
 function importBackup(event) {
   const file = event.target.files[0];
   if (!file) return;
-  file.text().then((text) => {
-    state = { goal: null, languageMode: "both", progress: [], ...JSON.parse(text) };
-    saveState();
-    render();
-  });
+  file.text().then(importBackupText);
+  event.target.value = "";
 }
 
 function value(selector) {
@@ -435,4 +559,4 @@ if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("./sw.js").catch(() => {});
 }
 
-render();
+initBackupLocation().finally(render);
