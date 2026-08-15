@@ -91,6 +91,18 @@ function totalChapters(scope) {
   return booksInScope(scope).reduce((sum, book) => sum + book.chapterCount, 0);
 }
 
+function chapterAtPosition(scope, position) {
+  if (position <= 0) return null;
+  let remaining = position;
+  for (const book of booksInScope(scope)) {
+    if (remaining <= book.chapterCount) return { book, chapter: remaining };
+    remaining -= book.chapterCount;
+  }
+  const scopedBooks = booksInScope(scope);
+  const lastBook = scopedBooks[scopedBooks.length - 1];
+  return { book: lastBook, chapter: lastBook.chapterCount };
+}
+
 function bookName(book) {
   if (state.languageMode === "englishOnly") return book.englishName;
   if (state.languageMode === "traditionalChineseOnly") return book.chineseName;
@@ -123,6 +135,15 @@ function calculatedFinishDate(startDate, scope, chaptersPerDay) {
   return localDateString(addDays(parseDate(startDate), days - 1));
 }
 
+function runningPaceProjection(goal, actual) {
+  const elapsed = daysElapsedInclusive(goal.startDate);
+  if (elapsed <= 0) return { average: 0, projectedFinishDate: null };
+  const average = actual / elapsed;
+  if (average <= 0) return { average, projectedFinishDate: null };
+  const projectedDays = Math.max(1, Math.ceil(totalChapters(goal.scope) / average));
+  return { average, projectedFinishDate: localDateString(addDays(parseDate(goal.startDate), projectedDays - 1)) };
+}
+
 function requiredPace(goal) {
   if (!goal.targetFinishDate) return null;
   const start = parseDate(goal.startDate);
@@ -138,7 +159,9 @@ function summary() {
   const total = totalChapters(goal.scope);
   const expected = Math.min(total, daysElapsedInclusive(goal.startDate) * Math.max(1, goal.chaptersPerDay));
   const actual = completed.length;
-  return { completed, latest: latestCompleted(completed), total, actual, expected, remaining: total - actual, aheadBehind: actual - expected, percent: Math.round((actual / total) * 100), onTrack: actual >= expected };
+  const expectedChapter = chapterAtPosition(goal.scope, expected);
+  const runningProjection = runningPaceProjection(goal, actual);
+  return { completed, latest: latestCompleted(completed), expectedChapter, runningProjection, total, actual, expected, remaining: total - actual, aheadBehind: actual - expected, percent: Math.round((actual / total) * 100), onTrack: actual >= expected };
 }
 
 function latestCompleted(completed) {
@@ -204,15 +227,18 @@ function renderDashboard() {
   const s = summary();
   const goal = state.goal;
   const latest = s.latest ? chapterName(books[s.latest.bookId - 1], s.latest.chapterNumber) : "No chapters completed yet";
+  const expectedChapter = s.expectedChapter ? chapterName(s.expectedChapter.book, s.expectedChapter.chapter) : "Not started yet";
+  const runningAverage = s.runningProjection.average > 0 ? s.runningProjection.average.toFixed(1) : "0.0";
+  const runningFinish = s.runningProjection.projectedFinishDate ? formatDate(s.runningProjection.projectedFinishDate) : "Not enough progress yet";
   document.querySelector("#content").innerHTML = `
     <section class="card hero">
       <div class="ring" style="--progress:${s.percent * 3.6}deg"><strong>${s.percent}%</strong></div>
       <div class="status ${s.onTrack ? "on" : "off"}">${s.onTrack ? "✓ On Track" : "⚠ Off Track"}</div>
     </section>
     <h2 class="section-title">Progress</h2>
-    <section class="card">${row("Completed", `${s.actual} / ${s.total}`)}${row("Last completed", latest)}${row("Remaining", s.remaining)}${row("Expected by today", s.expected)}${row(s.aheadBehind >= 0 ? "Ahead" : "Behind", Math.abs(s.aheadBehind))}</section>
+    <section class="card">${row("Completed", `${s.actual} / ${s.total}`)}${row("Last completed", latest)}${row("Remaining", s.remaining)}${row("Expected by today", `${s.expected} - ${expectedChapter}`)}${row(s.aheadBehind >= 0 ? "Ahead" : "Behind", Math.abs(s.aheadBehind))}</section>
     <h2 class="section-title">Goal</h2>
-    <section class="card">${row("Scope", scopeLabels[goal.scope])}${row("Start date", formatDate(goal.startDate))}${row("Expected finish", formatDate(expectedFinishDate(goal)))}${row("Chapters/day", goal.chaptersPerDay)}</section>
+    <section class="card">${row("Scope", scopeLabels[goal.scope])}${row("Start date", formatDate(goal.startDate))}${row("Expected finish", formatDate(expectedFinishDate(goal)))}${row("Chapters/day", goal.chaptersPerDay)}${row("Running chapters/day", runningAverage)}${row("Running projected finish", runningFinish)}</section>
   `;
 }
 
