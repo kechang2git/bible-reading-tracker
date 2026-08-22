@@ -140,6 +140,10 @@ h1 {
   color: white;
 }
 
+.compact-primary {
+  margin-top: 0;
+}
+
 .secondary {
   background: var(--soft);
   color: var(--text);
@@ -252,6 +256,35 @@ h1 {
 .row span {
   color: var(--muted);
   text-align: right;
+}
+
+.record-list {
+  display: grid;
+  gap: 12px;
+}
+
+.record-card .row {
+  padding-block: 13px;
+}
+
+.record-title {
+  padding: 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.record-title strong,
+.record-title span {
+  display: block;
+}
+
+.record-title strong {
+  font-size: 18px;
+}
+
+.record-title span {
+  margin-top: 4px;
+  color: var(--muted);
+  font-weight: 700;
 }
 
 .tabs {
