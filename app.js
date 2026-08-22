@@ -42,9 +42,11 @@ let expandedBooks = new Set();
 let backupDirectoryHandle = null;
 
 function loadState() {
-  const fallback = { goal: null, languageMode: "both", progress: [], backupLocation: null };
+  const fallback = { goal: null, languageMode: "both", progress: [], backupLocation: null, finishedRecords: [] };
   try {
-    return { ...fallback, ...JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}") };
+    const loaded = { ...fallback, ...JSON.parse(localStorage.getItem(STORAGE_KEY) || "{}") };
+    loaded.finishedRecords = Array.isArray(loaded.finishedRecords) ? loaded.finishedRecords : [];
+    return loaded;
   } catch {
     return fallback;
   }
@@ -174,6 +176,97 @@ function completionTime(item) {
   return new Date(item.completedTimestamp || `${item.completedDate}T00:00:00`).getTime();
 }
 
+function inclusiveDayCount(startDate, endDate) {
+  const start = parseDate(startDate);
+  const end = parseDate(endDate);
+  if (end < start) return 0;
+  return Math.floor((end - start) / 86400000) + 1;
+}
+
+function finishedRecordKey(goal, s) {
+  const latestStamp = s.latest?.completedTimestamp || s.latest?.completedDate || "none";
+  return [goal.scope, goal.startDate, expectedFinishDate(goal), goal.chaptersPerDay, s.total, latestStamp].join("|");
+}
+
+function hasFinishedRecordForCurrentGoal(s) {
+  const key = finishedRecordKey(state.goal, s);
+  return (state.finishedRecords || []).some((record) => record.sourceKey === key);
+}
+
+function scheduleSummary(deltaDays) {
+  if (deltaDays < 0) return `${Math.abs(deltaDays)} days early`;
+  if (deltaDays > 0) return `${deltaDays} days late`;
+  return "On target date";
+}
+
+function buildFinishedRecord(s) {
+  const goal = state.goal;
+  const targetFinishDate = expectedFinishDate(goal);
+  const accomplishedDate = s.latest?.completedDate || todayString();
+  const daysTaken = Math.max(1, inclusiveDayCount(goal.startDate, accomplishedDate));
+  const deltaDays = Math.round((parseDate(accomplishedDate) - parseDate(targetFinishDate)) / 86400000);
+  return {
+    id: `finished-${Date.now()}`,
+    sourceKey: finishedRecordKey(goal, s),
+    scope: goal.scope,
+    scopeLabel: scopeLabels[goal.scope],
+    languageMode: state.languageMode,
+    languageLabel: languageLabels[state.languageMode],
+    startDate: goal.startDate,
+    targetFinishDate,
+    accomplishedDate,
+    accomplishedTimestamp: new Date().toISOString(),
+    targetedChaptersPerDay: goal.chaptersPerDay,
+    finishedChaptersPerDay: Number((s.total / daysTaken).toFixed(2)),
+    totalChapters: s.total,
+    completedChapters: s.actual,
+    daysTaken,
+    lastCompletedChapter: s.latest ? chapterName(books[s.latest.bookId - 1], s.latest.chapterNumber) : "None",
+    lastCompletedDate: s.latest?.completedDate || null,
+    scheduleDeltaDays: deltaDays,
+    scheduleSummary: scheduleSummary(deltaDays),
+  };
+}
+
+function renderFinishedRecord(record) {
+  const target = record.targetFinishDate || record.expectedFinishDate;
+  const accomplishedDate = record.accomplishedDate || record.lastCompletedDate || todayString();
+  const lastCompleted = record.lastCompletedDate ? `${record.lastCompletedChapter} on ${formatDate(record.lastCompletedDate)}` : record.lastCompletedChapter;
+  return `<section class="card record-card">
+    <div class="record-title"><strong>${record.scopeLabel || scopeLabels[record.scope] || "Finished Goal"}</strong><span>${formatDate(accomplishedDate)} - ${record.scheduleSummary || "Completed"}</span></div>
+    ${row("Start date", formatDate(record.startDate))}
+    ${row("Targeted date", target ? formatDate(target) : "Not saved")}
+    ${row("Accomplished date", formatDate(accomplishedDate))}
+    ${row("Chapters", `${record.completedChapters || record.totalChapters} / ${record.totalChapters}`)}
+    ${row("Targeted chapters/day", record.targetedChaptersPerDay)}
+    ${row("Finished chapters/day", record.finishedChaptersPerDay)}
+    ${row("Days taken", record.daysTaken)}
+    ${row("Language", record.languageLabel || languageLabels[record.languageMode] || "Unknown")}
+    ${row("Last completed", lastCompleted)}
+  </section>`;
+}
+
+function renderFinishedRecords() {
+  const records = state.finishedRecords || [];
+  if (!records.length) {
+    return `<h2 class="section-title">Finished Records</h2><section class="card empty">Saved finished goals will appear here.</section>`;
+  }
+  return `<h2 class="section-title">Finished Records</h2><div class="record-list">${records.map(renderFinishedRecord).join("")}</div>`;
+}
+
+function saveFinishedRecord() {
+  const s = summary();
+  if (s.actual < s.total) return;
+  if (hasFinishedRecordForCurrentGoal(s)) {
+    alert("This finished goal is already saved.");
+    return;
+  }
+  if (!confirm("Save this finished goal to Finished Records? Your current progress will stay unchanged.")) return;
+  state.finishedRecords = [buildFinishedRecord(s), ...(state.finishedRecords || [])];
+  saveState();
+  renderDashboard();
+}
+
 function render() {
   if (!state.goal) {
     renderSetup();
@@ -230,6 +323,7 @@ function renderDashboard() {
   const expectedChapter = s.expectedChapter ? chapterName(s.expectedChapter.book, s.expectedChapter.chapter) : "Not started yet";
   const runningAverage = s.runningProjection.average > 0 ? s.runningProjection.average.toFixed(1) : "0.0";
   const runningFinish = s.runningProjection.projectedFinishDate ? formatDate(s.runningProjection.projectedFinishDate) : "Not enough progress yet";
+  const canSaveFinishedRecord = s.actual >= s.total && !hasFinishedRecordForCurrentGoal(s);
   document.querySelector("#content").innerHTML = `
     <section class="card hero">
       <div class="ring" style="--progress:${s.percent * 3.6}deg"><strong>${s.percent}%</strong></div>
@@ -239,7 +333,10 @@ function renderDashboard() {
     <section class="card">${row("Completed", `${s.actual} / ${s.total}`)}${row("Last completed", latest)}${row("Remaining", s.remaining)}${row("Expected by today", `${s.expected} - ${expectedChapter}`)}${row(s.aheadBehind >= 0 ? "Ahead" : "Behind", Math.abs(s.aheadBehind))}</section>
     <h2 class="section-title">Goal</h2>
     <section class="card">${row("Scope", scopeLabels[goal.scope])}${row("Start date", formatDate(goal.startDate))}${row("Expected finish", formatDate(expectedFinishDate(goal)))}${row("Chapters/day", goal.chaptersPerDay)}${row("Running chapters/day", runningAverage)}${row("Running projected finish", runningFinish)}</section>
+    ${canSaveFinishedRecord ? `<h2 class="section-title">Finished Goal</h2><section class="card padded actions"><p class="backup-note">This goal is complete. Save a finished record for future reference; your current progress will stay unchanged.</p><button class="primary compact-primary" id="saveFinishedRecord">Save Finished Record</button></section>` : ""}
+    ${renderFinishedRecords()}
   `;
+  document.querySelector("#saveFinishedRecord")?.addEventListener("click", saveFinishedRecord);
 }
 
 function renderBible() {
@@ -447,7 +544,8 @@ async function confirmQuickBackup() {
 
 async function importBackupText(text) {
   const currentBackupLocation = state.backupLocation || null;
-  state = { goal: null, languageMode: "both", progress: [], ...JSON.parse(text), backupLocation: currentBackupLocation };
+  state = { goal: null, languageMode: "both", progress: [], finishedRecords: [], ...JSON.parse(text), backupLocation: currentBackupLocation };
+  state.finishedRecords = Array.isArray(state.finishedRecords) ? state.finishedRecords : [];
   saveState();
   render();
 }
