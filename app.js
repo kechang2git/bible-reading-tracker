@@ -32,7 +32,14 @@ const books = [
   id: index + 1, chineseName, englishName, testament, chapterCount
 }));
 
-const scopeLabels = { entireBible: "Entire Bible", oldTestament: "Old Testament", newTestament: "New Testament" };
+const scopeLabels = {
+  entireBible: "Entire Bible",
+  oldTestament: "Old Testament",
+  oldTestamentPart1: "Old Testament Part 1: Genesis - 1 Kings",
+  oldTestamentPart2: "Old Testament Part 2: 2 Kings - Psalms",
+  oldTestamentPart3: "Old Testament Part 3: Proverbs - Malachi",
+  newTestament: "New Testament",
+};
 const languageLabels = { englishOnly: "English only", traditionalChineseOnly: "Traditional Chinese only", both: "Traditional Chinese + English" };
 const tabs = [["dashboard", "◴", "Dashboard"], ["bible", "☑", "Bible"], ["calendar", "▦", "Calendar"], ["settings", "⚙", "Settings"]];
 
@@ -85,6 +92,9 @@ function formatDateWithWeekday(value) {
 
 function booksInScope(scope) {
   if (scope === "oldTestament") return books.filter((book) => book.testament === "old");
+  if (scope === "oldTestamentPart1") return books.filter((book) => book.id >= 1 && book.id <= 11);
+  if (scope === "oldTestamentPart2") return books.filter((book) => book.id >= 12 && book.id <= 19);
+  if (scope === "oldTestamentPart3") return books.filter((book) => book.id >= 20 && book.id <= 39);
   if (scope === "newTestament") return books.filter((book) => book.testament === "new");
   return books;
 }
@@ -676,6 +686,7 @@ function row(label, value) {
 }
 
 function tabTitle(tab) {
+  if (tab === "dashboard") return "Bible Reading Dashboard";
   return tabs.find(([key]) => key === tab)[2];
 }
 
